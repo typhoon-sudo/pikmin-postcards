@@ -514,52 +514,73 @@
     }
 
     // Fetch and sync data from Cloudflare D1/R2 API
-    async function initVault() {
-      try {
-        const response = await fetch(`${API_BASE}/api/postcards`);
-        if (!response.ok) throw new Error("Network response was not ok");
-        
-        const postcards = await response.json();
-        districtRegistry = {};
+    // Fetch and sync data from Cloudflare D1/R2 API
+async function initVault() {
+  try {
+    const response = await fetch(`${API_BASE}/api/postcards`);
+    if (!response.ok) throw new Error("Network response was not ok");
+    
+    const postcards = await response.json();
+    districtRegistry = {};
 
-        postcards.forEach(card => {
-          const areaKey = card.area_key;
-          if (!districtRegistry[areaKey]) {
-            districtRegistry[areaKey] = {
-              areaName: card.area_name,
-              lat: parseFloat(card.lat),
-              lng: parseFloat(card.lng),
-              cards: []
-            };
-          }
-          districtRegistry[areaKey].cards.push({
-            id: card.id,
-            title: card.title,
-            image: card.image_url
-          });
-        });
+    postcards.forEach(card => {
+      const areaKey = card.area_key;
+      const lat = parseFloat(card.lat);
+      const lng = parseFloat(card.lng);
 
-        // Render synced markers and sidebar entries
-        Object.keys(districtRegistry).forEach(areaKey => {
-          updateMapMarker(areaKey);
-        });
-        renderSidebarList();
-        await saveVaultData();
+      if (isNaN(lat) || isNaN(lng)) return; // Skip invalid coordinates
 
-      } catch (err) {
-        console.warn("Backend connection failed. Loading cached local data...", err);
-        const savedData = await localforage.getItem('pikmin_vault_data');
-        if (savedData) {
-          districtRegistry = savedData;
-          Object.keys(districtRegistry).forEach(areaKey => {
-            updateMapMarker(areaKey);
-          });
-          renderSidebarList();
-        }
+      if (!districtRegistry[areaKey]) {
+        districtRegistry[areaKey] = {
+          areaName: card.area_name,
+          lat: lat,
+          lng: lng,
+          cards: []
+        };
       }
+      districtRegistry[areaKey].cards.push({
+        id: card.id,
+        title: card.title,
+        image: card.image_url
+      });
+    });
+
+    // Clear existing markers before rendering fresh sync
+    markerClusterGroup.clearLayers();
+    Object.keys(mapMarkers).forEach(key => delete mapMarkers[key]);
+
+    // Render synced markers and sidebar entries
+    Object.keys(districtRegistry).forEach(areaKey => {
+      updateMapMarker(areaKey);
+    });
+    renderSidebarList();
+    await saveVaultData();
+
+    // AUTO-FIT MAP: Adjust viewport to show all synced markers
+    const bounds = markerClusterGroup.getBounds();
+    if (bounds.isValid()) {
+      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
     }
 
+  } catch (err) {
+    console.warn("Backend connection failed. Loading cached local data...", err);
+    const savedData = await localforage.getItem('pikmin_vault_data');
+    if (savedData) {
+      districtRegistry = savedData;
+      Object.keys(districtRegistry).forEach(areaKey => {
+        updateMapMarker(areaKey);
+      });
+      renderSidebarList();
+    }
+  }
+}
+
+// Re-fetch automatically whenever Device B returns to the foreground/tab
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
     initVault();
+  }
+});
 
     // Register Service Worker
     if ('serviceWorker' in navigator) {
