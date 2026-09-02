@@ -517,7 +517,11 @@
     // Fetch and sync data from Cloudflare D1/R2 API
 async function initVault() {
   try {
-    const response = await fetch(`${API_BASE}/api/postcards`);
+    // Replace this line inside initVault():
+const response = await fetch(`${API_BASE}/api/postcards`);
+
+// With this line:
+const response = await fetch(`${API_BASE}/api/postcards?t=${Date.now()}`, { cache: 'no-store' });
     if (!response.ok) throw new Error("Network response was not ok");
     
     const postcards = await response.json();
@@ -583,11 +587,15 @@ document.addEventListener('visibilitychange', () => {
 });
 
     // Register Service Worker
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW registration failed:', err));
-      });
-    }
+    // Register Service Worker
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW registration failed:', err));
+  });
+}
+
+// FIX: Initialize data immediately on page load
+initVault();
   </script>
 </body>
 </html>
