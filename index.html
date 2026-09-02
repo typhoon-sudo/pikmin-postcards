@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Pikmin Postcard Vault</title>
+
+  <!-- PWA Settings & Manifest -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="pikminlogo.png">
+  <meta name="theme-color" content="#2e7d32">
+
+  <!-- Google Font: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Leaflet CSS & MarkerCluster CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+
+  <style>
+    * { 
+      box-sizing: border-box; 
+      margin: 0; 
+      padding: 0; 
+    }
+
+    body, input, button, select, textarea, .leaflet-container, .leaflet-popup-content-wrapper, .leaflet-popup-content {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif !important;
+    }
+
+    body { display: flex; height: 100vh; width: 100vw; overflow: hidden; background: #f4f6f8; }
+
+    #map { flex: 1; height: 100%; width: 100%; z-index: 1; }
+
+    #sidebar {
+      width: 380px;
+      background: #ffffff;
+      border-right: 1px solid #e0e0e0;
+      display: flex;
+      flex-direction: column;
+      z-index: 1000;
+      box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+      transition: transform 0.3s ease-in-out;
+    }
+
+    .header { padding: 14px 16px; background: #2e7d32; color: white; display: flex; justify-content: space-between; align-items: center; }
+    .header h1 { font-size: 1.1rem; font-weight: 600; }
+    .close-btn { background: none; border: none; color: white; font-size: 1.2rem; cursor: pointer; display: none; }
+
+    .content-area { overflow-y: auto; flex: 1; }
+    .form-container { padding: 16px; border-bottom: 1px solid #eee; background: #fafafa; }
+    .form-group { margin-bottom: 12px; }
+    .form-group label { display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 4px; color: #555; }
+    .form-group input { width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.9rem; }
+    
+    #preview-container { display: none; margin-top: 8px; width: 100%; height: 120px; border-radius: 6px; overflow: hidden; border: 1px solid #ddd; }
+    #preview-img { width: 100%; height: 100%; object-fit: contain; background: #111; }
+
+    .btn-primary { width: 100%; padding: 10px; background: #4CAF50; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; }
+    .btn-primary:hover { background: #388E3C; }
+    .btn-primary:disabled { background: #ccc; cursor: not-allowed; }
+
+    #postcard-list { padding: 16px; }
+    .search-box { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 12px; font-size: 0.85rem; }
+    .list-title { font-size: 0.85rem; font-weight: 700; color: #888; text-transform: uppercase; margin-bottom: 12px; letter-spacing: 0.5px; }
+    
+    .mini-card { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid #eee; border-radius: 8px; margin-bottom: 8px; background: #fff; position: relative; }
+    .mini-card img { width: 50px; height: auto; aspect-ratio: 1023 / 684; object-fit: contain; border-radius: 4px; background: #f0f0f0; cursor: pointer; }
+    .mini-card-info { flex: 1; font-size: 0.8rem; cursor: pointer; }
+    .mini-card-info strong { display: block; color: #333; }
+    .mini-card-info span { color: #666; font-size: 0.75rem; }
+    
+    .delete-btn-text { background: #ffebee; color: #c62828; border: 1px solid #ffcdd2; font-size: 0.72rem; padding: 3px 8px; border-radius: 4px; cursor: pointer; font-weight: 600; transition: background 0.2s; }
+    .delete-btn-text:hover { background: #ffcdd2; }
+
+    #mobile-fab {
+      display: none;
+      position: fixed;
+      bottom: 24px;
+      right: 20px;
+      z-index: 999;
+      background: #2e7d32;
+      color: white;
+      border: none;
+      padding: 12px 20px;
+      border-radius: 30px;
+      font-weight: 600;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+      cursor: pointer;
+    }
+
+    .popup-gallery { width: 250px; max-height: 320px; overflow-y: auto; padding: 2px; }
+    .popup-item { border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 10px; }
+    .popup-item:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+    .popup-title { font-weight: 700; font-size: 0.88rem; color: #2c3e50; line-height: 1.2; }
+    .popup-location { font-size: 0.75rem; color: #666; margin-top: 2px; margin-bottom: 6px; }
+    
+    .popup-item img {
+      width: 100%;
+      height: auto;
+      aspect-ratio: 1023 / 684;
+      object-fit: contain;
+      border-radius: 6px;
+      display: block;
+      background: #f8f8f8;
+    }
+
+    .popup-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+    .popup-delete-btn { background: #ffebee; color: #c62828; border: 1px solid #ffcdd2; font-size: 0.72rem; padding: 3px 8px; border-radius: 4px; cursor: pointer; font-weight: 600; }
+    .popup-delete-btn:hover { background: #ffcdd2; }
+
+    .custom-dot-marker {
+      background-color: #2e7d32;
+      border: 2px solid #ffffff;
+      border-radius: 50%;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+      color: #ffffff;
+      font-weight: 700;
+      font-size: 0.8rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .marker-cluster-small, .marker-cluster-medium, .marker-cluster-large {
+      background-color: rgba(46, 125, 50, 0.4) !important;
+    }
+    .marker-cluster-small div, .marker-cluster-medium div, .marker-cluster-large div {
+      background-color: #2e7d32 !important;
+      color: white !important;
+      font-weight: bold;
+    }
+
+    @media (max-width: 767px) {
+      #sidebar {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        max-height: 80vh;
+        border-radius: 16px 16px 0 0;
+        border-right: none;
+        transform: translateY(100%);
+      }
+
+      #sidebar.open { transform: translateY(0); }
+      .close-btn { display: block; }
+      #mobile-fab { display: block; }
+    }
+  </style>
+</head>
+<body>
+
+  <button id="mobile-fab">Add / View Cards</button>
+
+  <div id="sidebar">
+    <div class="header">
+      <h1>Postcard Vault</h1>
+      <button class="close-btn" id="close-drawer-btn">✕</button>
+    </div>
+
+    <div class="content-area">
+      <div class="form-container">
+        <form id="upload-form">
+          <div class="form-group">
+            <label for="card-title">Postcard Title</label>
+            <input type="text" id="card-title" placeholder="e.g., D2 Place One" required />
+          </div>
+          
+          <div class="form-group">
+            <label for="area-input">District / Area</label>
+            <input type="text" id="area-input" placeholder="e.g., Cheung Yee Street, Hong Kong" required />
+          </div>
+
+          <div class="form-group">
+            <label for="image-input">Postcard Screenshot</label>
+            <input type="file" id="image-input" accept="image/*" required />
+            <div id="preview-container">
+              <img id="preview-img" src="" alt="Preview" />
+            </div>
+          </div>
+
+          <button type="submit" id="submit-btn" class="btn-primary">Add to Map</button>
+        </form>
+      </div>
+
+      <div id="postcard-list">
+        <div class="list-title">Saved Postcards</div>
+        <input type="text" id="search-input" class="search-box" placeholder="Search by title or district..." />
+        <div id="cards-container"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <!-- Leaflet, MarkerCluster & LocalForage (IndexedDB Wrapper) -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/localforage@1.10.0/dist/localforage.min.js"></script>
+  
+  <script>
+    const API_BASE = 'https://pikmin-api.typhoonnerd.workers.dev';
+
+    // Free OpenStreetMap HOT Tile Layer
+    const map = L.map('map', { zoomControl: false }).setView([23.9756, 120.9738], 7);
+    L.control.zoom({ position: 'topright' }).addTo(map);
+    
+    L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxZoom: 19
+    }).addTo(map);
+
+    // Marker Clustering Group
+    const markerClusterGroup = L.markerClusterGroup({
+      showCoverageOnHover: false,
+      maxClusterRadius: 45,
+      iconCreateFunction: function(cluster) {
+        const markers = cluster.getAllChildMarkers();
+        let totalCards = 0;
+        markers.forEach(m => {
+          totalCards += (m.options.cardCount || 1);
+        });
+
+        let c = ' marker-cluster-';
+        if (totalCards < 10) { c += 'small'; }
+        else if (totalCards < 100) { c += 'medium'; }
+        else { c += 'large'; }
+
+        return L.divIcon({
+          html: '<div><span>' + totalCards + '</span></div>',
+          className: 'marker-cluster' + c,
+          iconSize: L.point(40, 40)
+        });
+      }
+    });
+    map.addLayer(markerClusterGroup);
+
+    let districtRegistry = {};
+    const mapMarkers = {};
+    let currentImageBlob = null;
+
+    // Save to LocalForage for offline fallback
+    async function saveVaultData() {
+      try {
+        await localforage.setItem('pikmin_vault_data', districtRegistry);
+      } catch (e) {
+        console.error("IndexedDB error:", e);
+      }
+    }
+
+    // Image Compressor Function (Resizes to max 800px width, returns JPEG Blob)
+    function compressImage(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = (e) => {
+          const img = new Image();
+          img.src = e.target.result;
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const maxWidth = 800;
+            let width = img.width;
+            let height = img.height;
+
+            if (width > maxWidth) {
+              height = Math.round((height * maxWidth) / width);
+              width = maxWidth;
+            }
+
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+
+            canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.75);
+          };
+          img.onerror = reject;
+        };
+        reader.onerror = reject;
+      });
+    }
+
+    // DOM References
+    const sidebar = document.getElementById('sidebar');
+    const mobileFab = document.getElementById('mobile-fab');
+    const closeDrawerBtn = document.getElementById('close-drawer-btn');
+    const imageInput = document.getElementById('image-input');
+    const previewContainer = document.getElementById('preview-container');
+    const previewImg = document.getElementById('preview-img');
+    const uploadForm = document.getElementById('upload-form');
+    const submitBtn = document.getElementById('submit-btn');
+    const searchInput = document.getElementById('search-input');
+    const cardsContainer = document.getElementById('cards-container');
+
+    mobileFab.addEventListener('click', () => sidebar.classList.add('open'));
+    closeDrawerBtn.addEventListener('click', () => sidebar.classList.remove('open'));
+    searchInput.addEventListener('input', renderSidebarList);
+
+    // Compress image as soon as user picks a file
+    imageInput.addEventListener('change', async function(e) {
+      const file = e.target.files[0];
+      if (file) {
+        submitBtn.disabled = true;
+        submitBtn.innerText = "Processing image...";
+        try {
+          currentImageBlob = await compressImage(file);
+          previewImg.src = URL.createObjectURL(currentImageBlob);
+          previewContainer.style.display = 'block';
+        } catch (err) {
+          alert("Error processing image file.");
+        } finally {
+          submitBtn.disabled = false;
+          submitBtn.innerText = "Add to Map";
+        }
+      }
+    });
+
+    uploadForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      
+      const title = document.getElementById('card-title').value.trim();
+      const area = document.getElementById('area-input').value.trim();
+      const areaKey = area.toLowerCase();
+
+      submitBtn.disabled = true;
+      submitBtn.innerText = "Uploading & Saving...";
+
+      try {
+        let lat, lng;
+
+        if (districtRegistry[areaKey]) {
+          lat = districtRegistry[areaKey].lat;
+          lng = districtRegistry[areaKey].lng;
+        } else {
+          const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(area)}`);
+          const results = await response.json();
+
+          if (!results || results.length === 0) {
+            alert("Could not find coordinates for that area.");
+            return;
+          }
+
+          lat = parseFloat(results[0].lat);
+          lng = parseFloat(results[0].lon);
+        }
+
+        // Upload to Cloudflare Worker API
+        const formData = new FormData();
+        formData.append("title", title);
+        formData.append("areaName", area);
+        formData.append("lat", lat);
+        formData.append("lng", lng);
+        formData.append("image", currentImageBlob, "postcard.jpg");
+
+        const apiRes = await fetch(`${API_BASE}/api/postcards`, {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!apiRes.ok) throw new Error("Cloud upload failed");
+        const cloudData = await apiRes.json();
+
+        if (!districtRegistry[areaKey]) {
+          districtRegistry[areaKey] = { areaName: area, lat, lng, cards: [] };
+        }
+
+        districtRegistry[areaKey].cards.push({ 
+          id: cloudData.cardId, 
+          title, 
+          image: cloudData.imageUrl 
+        });
+
+        updateMapMarker(areaKey);
+        await saveVaultData();
+        renderSidebarList();
+
+        uploadForm.reset();
+        previewContainer.style.display = 'none';
+        currentImageBlob = null;
+
+        sidebar.classList.remove('open');
+        map.flyTo([lat, lng], 11, { duration: 1.2 });
+
+      } catch (err) {
+        console.error(err);
+        alert("Failed to add postcard.");
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerText = "Add to Map";
+      }
+    });
+
+    function createCustomDotIcon(count) {
+      return L.divIcon({
+        className: 'custom-dot-marker',
+        html: `<span>${count}</span>`,
+        iconSize: [26, 26],
+        iconAnchor: [13, 13]
+      });
+    }
+
+    function updateMapMarker(areaKey) {
+      const data = districtRegistry[areaKey];
+      if (!data) return;
+      const count = data.cards.length;
+
+      let popupHtml = `<div class="popup-gallery">`;
+      data.cards.forEach(card => {
+        popupHtml += `
+          <div class="popup-item">
+            <div class="popup-title">${card.title}</div>
+            <div class="popup-location">${data.areaName}</div>
+            <img src="${card.image}" />
+            <div class="popup-actions">
+              <button class="popup-delete-btn" onclick="deletePostcard('${card.id}', '${areaKey}')">Delete</button>
+            </div>
+          </div>
+        `;
+      });
+      popupHtml += `</div>`;
+
+      if (mapMarkers[areaKey]) {
+        mapMarkers[areaKey].setPopupContent(popupHtml);
+        mapMarkers[areaKey].setIcon(createCustomDotIcon(count));
+        mapMarkers[areaKey].options.cardCount = count;
+        markerClusterGroup.refreshClusters(mapMarkers[areaKey]);
+      } else {
+        const marker = L.marker([data.lat, data.lng], {
+          icon: createCustomDotIcon(count),
+          cardCount: count
+        }).bindPopup(popupHtml);
+
+        markerClusterGroup.addLayer(marker);
+        mapMarkers[areaKey] = marker;
+      }
+    }
+
+    window.deletePostcard = async function(cardId, areaKey) {
+      try {
+        const res = await fetch(`${API_BASE}/api/postcards/${cardId}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error("Failed to delete from server");
+
+        const group = districtRegistry[areaKey];
+        if (!group) return;
+
+        group.cards = group.cards.filter(c => c.id !== cardId);
+
+        if (group.cards.length === 0) {
+          if (mapMarkers[areaKey]) {
+            markerClusterGroup.removeLayer(mapMarkers[areaKey]);
+            delete mapMarkers[areaKey];
+          }
+          delete districtRegistry[areaKey];
+        } else {
+          updateMapMarker(areaKey);
+        }
+
+        await saveVaultData();
+        renderSidebarList();
+      } catch (err) {
+        console.error(err);
+        alert("Failed to delete postcard.");
+      }
+    };
+
+    function renderSidebarList() {
+      const query = searchInput.value.toLowerCase().trim();
+      cardsContainer.innerHTML = "";
+
+      Object.keys(districtRegistry).forEach(key => {
+        const group = districtRegistry[key];
+        group.cards.forEach(card => {
+          const matchesTitle = card.title.toLowerCase().includes(query);
+          const matchesLocation = group.areaName.toLowerCase().includes(query);
+
+          if (matchesTitle || matchesLocation) {
+            const cardEl = document.createElement('div');
+            cardEl.className = 'mini-card';
+            cardEl.innerHTML = `
+              <img src="${card.image}" />
+              <div class="mini-card-info">
+                <strong>${card.title}</strong>
+                <span>${group.areaName}</span>
+              </div>
+              <button class="delete-btn-text" title="Delete Postcard">Delete</button>
+            `;
+
+            const infoArea = cardEl.querySelector('.mini-card-info');
+            const imgArea = cardEl.querySelector('img');
+            const delBtn = cardEl.querySelector('.delete-btn-text');
+
+            const flyAction = () => {
+              sidebar.classList.remove('open');
+              markerClusterGroup.zoomToShowLayer(mapMarkers[key], () => {
+                mapMarkers[key].openPopup();
+              });
+            };
+
+            infoArea.onclick = flyAction;
+            imgArea.onclick = flyAction;
+            delBtn.onclick = (e) => {
+              e.stopPropagation();
+              deletePostcard(card.id, key);
+            };
+
+            cardsContainer.appendChild(cardEl);
+          }
+        });
+      });
+    }
+
+    // Fetch and sync data from Cloudflare D1/R2 API
+    async function initVault() {
+      try {
+        const response = await fetch(`${API_BASE}/api/postcards`);
+        if (!response.ok) throw new Error("Network response was not ok");
+        
+        const postcards = await response.json();
+        districtRegistry = {};
+
+        postcards.forEach(card => {
+          const areaKey = card.area_key;
+          if (!districtRegistry[areaKey]) {
+            districtRegistry[areaKey] = {
+              areaName: card.area_name,
+              lat: parseFloat(card.lat),
+              lng: parseFloat(card.lng),
+              cards: []
+            };
+          }
+          districtRegistry[areaKey].cards.push({
+            id: card.id,
+            title: card.title,
+            image: card.image_url
+          });
+        });
+
+        // Render synced markers and sidebar entries
+        Object.keys(districtRegistry).forEach(areaKey => {
+          updateMapMarker(areaKey);
+        });
+        renderSidebarList();
+        await saveVaultData();
+
+      } catch (err) {
+        console.warn("Backend connection failed. Loading cached local data...", err);
+        const savedData = await localforage.getItem('pikmin_vault_data');
+        if (savedData) {
+          districtRegistry = savedData;
+          Object.keys(districtRegistry).forEach(areaKey => {
+            updateMapMarker(areaKey);
+          });
+          renderSidebarList();
+        }
+      }
+    }
+
+    initVault();
+
+    // Register Service Worker
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW registration failed:', err));
+      });
+    }
+  </script>
+</body>
+</html>
