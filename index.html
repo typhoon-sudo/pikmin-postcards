@@ -46,9 +46,35 @@
       transition: transform 0.3s ease-in-out;
     }
 
-    .header { padding: 14px 16px; background: #2e7d32; color: white; display: flex; justify-content: space-between; align-items: center; }
+    .header { padding: 14px 16px; background: #2e7d32; color: white; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
     .header h1 { font-size: 1.1rem; font-weight: 600; }
-    .close-btn { background: none; border: none; color: white; font-size: 1.2rem; cursor: pointer; display: none; }
+    .header-actions { display: flex; align-items: center; gap: 8px; }
+    
+    .sync-badge {
+      font-size: 0.72rem;
+      background: rgba(255, 255, 255, 0.18);
+      padding: 4px 8px;
+      border-radius: 12px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .sync-badge.offline { background: #c62828; }
+
+    .icon-btn {
+      background: rgba(255, 255, 255, 0.18);
+      border: none;
+      color: white;
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .icon-btn:hover { background: rgba(255, 255, 255, 0.28); }
+    .close-btn { background: none; border: none; color: white; font-size: 1.2rem; cursor: pointer; display: none; padding-left: 4px; }
 
     .content-area { overflow-y: auto; flex: 1; }
     .form-container { padding: 16px; border-bottom: 1px solid #eee; background: #fafafa; }
@@ -159,7 +185,11 @@
   <div id="sidebar">
     <div class="header">
       <h1>Postcard Vault</h1>
-      <button class="close-btn" id="close-drawer-btn">✕</button>
+      <div class="header-actions">
+        <span id="sync-status" class="sync-badge">Connecting...</span>
+        <button id="manual-sync-btn" class="icon-btn" title="Sync Now">↻</button>
+        <button class="close-btn" id="close-drawer-btn">✕</button>
+      </div>
     </div>
 
     <div class="content-area">
@@ -204,6 +234,7 @@
   
   <script>
     const API_BASE = 'https://pikmin-api.typhoonnerd.workers.dev';
+    const SYNC_INTERVAL_MS = 10000; // Poll every 10s while app is active
 
     // Free OpenStreetMap HOT Tile Layer
     const map = L.map('map', { zoomControl: false }).setView([23.9756, 120.9738], 7);
@@ -242,6 +273,39 @@
     let districtRegistry = {};
     const mapMarkers = {};
     let currentImageBlob = null;
+
+    // Sync state trackers
+    let isSyncing = false;
+    let isMutating = false;
+    let hasInitialFit = false;
+    let lastDataSignature = '';
+
+    function escapeHtml(str) {
+      return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function setSyncStatus(text, isOffline = false) {
+      const badge = document.getElementById('sync-status');
+      if (!badge) return;
+      badge.textContent = text;
+      badge.classList.toggle('offline', isOffline);
+    }
+
+    function computeRegistrySignature(registry) {
+      const entries = [];
+      Object.keys(registry).sort().forEach(areaKey => {
+        const cards = registry[areaKey].cards || [];
+        cards.forEach(c => {
+          entries.push(`${areaKey}:${c.id}:${c.title}:${c.image}`);
+        });
+      });
+      return entries.sort().join('|');
+    }
 
     // Save to LocalForage for offline fallback
     async function saveVaultData() {
@@ -288,6 +352,7 @@
     const sidebar = document.getElementById('sidebar');
     const mobileFab = document.getElementById('mobile-fab');
     const closeDrawerBtn = document.getElementById('close-drawer-btn');
+    const manualSyncBtn = document.getElementById('manual-sync-btn');
     const imageInput = document.getElementById('image-input');
     const previewContainer = document.getElementById('preview-container');
     const previewImg = document.getElementById('preview-img');
@@ -298,6 +363,7 @@
 
     mobileFab.addEventListener('click', () => sidebar.classList.add('open'));
     closeDrawerBtn.addEventListener('click', () => sidebar.classList.remove('open'));
+    manualSyncBtn.addEventListener('click', () => syncVault({ force: true }));
     searchInput.addEventListener('input', renderSidebarList);
 
     // Compress image as soon as user picks a file
@@ -326,8 +392,15 @@
       const area = document.getElementById('area-input').value.trim();
       const areaKey = area.toLowerCase();
 
+      if (!currentImageBlob) {
+        alert("Please select an image first.");
+        return;
+      }
+
+      isMutating = true;
       submitBtn.disabled = true;
       submitBtn.innerText = "Uploading & Saving...";
+      setSyncStatus("Uploading...");
 
       try {
         let lat, lng;
@@ -374,6 +447,7 @@
           image: cloudData.imageUrl 
         });
 
+        lastDataSignature = computeRegistrySignature(districtRegistry);
         updateMapMarker(areaKey);
         await saveVaultData();
         renderSidebarList();
@@ -389,8 +463,10 @@
         console.error(err);
         alert("Failed to add postcard.");
       } finally {
+        isMutating = false;
         submitBtn.disabled = false;
         submitBtn.innerText = "Add to Map";
+        await syncVault({ force: true });
       }
     });
 
@@ -403,6 +479,20 @@
       });
     }
 
+    function bindPopupDeleteButtons(containerEl) {
+      if (!containerEl) return;
+      containerEl.querySelectorAll('.popup-delete-btn').forEach(btn => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          deletePostcard(btn.dataset.id, btn.dataset.area);
+        };
+      });
+    }
+
+    map.on('popupopen', (e) => {
+      bindPopupDeleteButtons(e.popup.getElement());
+    });
+
     function updateMapMarker(areaKey) {
       const data = districtRegistry[areaKey];
       if (!data) return;
@@ -412,11 +502,11 @@
       data.cards.forEach(card => {
         popupHtml += `
           <div class="popup-item">
-            <div class="popup-title">${card.title}</div>
-            <div class="popup-location">${data.areaName}</div>
-            <img src="${card.image}" />
+            <div class="popup-title">${escapeHtml(card.title)}</div>
+            <div class="popup-location">${escapeHtml(data.areaName)}</div>
+            <img src="${escapeHtml(card.image)}" />
             <div class="popup-actions">
-              <button class="popup-delete-btn" onclick="deletePostcard('${card.id}', '${areaKey}')">Delete</button>
+              <button class="popup-delete-btn" data-id="${escapeHtml(card.id)}" data-area="${escapeHtml(areaKey)}">Delete</button>
             </div>
           </div>
         `;
@@ -428,6 +518,9 @@
         mapMarkers[areaKey].setIcon(createCustomDotIcon(count));
         mapMarkers[areaKey].options.cardCount = count;
         markerClusterGroup.refreshClusters(mapMarkers[areaKey]);
+        if (mapMarkers[areaKey].isPopupOpen()) {
+          bindPopupDeleteButtons(mapMarkers[areaKey].getPopup().getElement());
+        }
       } else {
         const marker = L.marker([data.lat, data.lng], {
           icon: createCustomDotIcon(count),
@@ -440,30 +533,37 @@
     }
 
     window.deletePostcard = async function(cardId, areaKey) {
+      isMutating = true;
+      setSyncStatus("Deleting...");
+
       try {
-        const res = await fetch(`${API_BASE}/api/postcards/${cardId}`, { method: 'DELETE' });
+        const res = await fetch(`${API_BASE}/api/postcards/${encodeURIComponent(cardId)}`, { method: 'DELETE' });
         if (!res.ok) throw new Error("Failed to delete from server");
 
         const group = districtRegistry[areaKey];
-        if (!group) return;
+        if (group) {
+          group.cards = group.cards.filter(c => String(c.id) !== String(cardId));
 
-        group.cards = group.cards.filter(c => c.id !== cardId);
-
-        if (group.cards.length === 0) {
-          if (mapMarkers[areaKey]) {
-            markerClusterGroup.removeLayer(mapMarkers[areaKey]);
-            delete mapMarkers[areaKey];
+          if (group.cards.length === 0) {
+            if (mapMarkers[areaKey]) {
+              markerClusterGroup.removeLayer(mapMarkers[areaKey]);
+              delete mapMarkers[areaKey];
+            }
+            delete districtRegistry[areaKey];
+          } else {
+            updateMapMarker(areaKey);
           }
-          delete districtRegistry[areaKey];
-        } else {
-          updateMapMarker(areaKey);
         }
 
+        lastDataSignature = computeRegistrySignature(districtRegistry);
         await saveVaultData();
         renderSidebarList();
       } catch (err) {
         console.error(err);
         alert("Failed to delete postcard.");
+      } finally {
+        isMutating = false;
+        await syncVault({ force: true });
       }
     };
 
@@ -481,10 +581,10 @@
             const cardEl = document.createElement('div');
             cardEl.className = 'mini-card';
             cardEl.innerHTML = `
-              <img src="${card.image}" />
+              <img src="${escapeHtml(card.image)}" />
               <div class="mini-card-info">
-                <strong>${card.title}</strong>
-                <span>${group.areaName}</span>
+                <strong>${escapeHtml(card.title)}</strong>
+                <span>${escapeHtml(group.areaName)}</span>
               </div>
               <button class="delete-btn-text" title="Delete Postcard">Delete</button>
             `;
@@ -513,89 +613,120 @@
       });
     }
 
-    // Fetch and sync data from Cloudflare D1/R2 API
-    // Fetch and sync data from Cloudflare D1/R2 API
-async function initVault() {
-  try {
-    // Replace this line inside initVault():
-const response = await fetch(`${API_BASE}/api/postcards`);
+    function rebuildAllMarkers() {
+      markerClusterGroup.clearLayers();
+      Object.keys(mapMarkers).forEach(key => delete mapMarkers[key]);
 
-// With this line:
-const response = await fetch(`${API_BASE}/api/postcards?t=${Date.now()}`, { cache: 'no-store' });
-    if (!response.ok) throw new Error("Network response was not ok");
-    
-    const postcards = await response.json();
-    districtRegistry = {};
-
-    postcards.forEach(card => {
-      const areaKey = card.area_key;
-      const lat = parseFloat(card.lat);
-      const lng = parseFloat(card.lng);
-
-      if (isNaN(lat) || isNaN(lng)) return; // Skip invalid coordinates
-
-      if (!districtRegistry[areaKey]) {
-        districtRegistry[areaKey] = {
-          areaName: card.area_name,
-          lat: lat,
-          lng: lng,
-          cards: []
-        };
-      }
-      districtRegistry[areaKey].cards.push({
-        id: card.id,
-        title: card.title,
-        image: card.image_url
-      });
-    });
-
-    // Clear existing markers before rendering fresh sync
-    markerClusterGroup.clearLayers();
-    Object.keys(mapMarkers).forEach(key => delete mapMarkers[key]);
-
-    // Render synced markers and sidebar entries
-    Object.keys(districtRegistry).forEach(areaKey => {
-      updateMapMarker(areaKey);
-    });
-    renderSidebarList();
-    await saveVaultData();
-
-    // AUTO-FIT MAP: Adjust viewport to show all synced markers
-    const bounds = markerClusterGroup.getBounds();
-    if (bounds.isValid()) {
-      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
-    }
-
-  } catch (err) {
-    console.warn("Backend connection failed. Loading cached local data...", err);
-    const savedData = await localforage.getItem('pikmin_vault_data');
-    if (savedData) {
-      districtRegistry = savedData;
       Object.keys(districtRegistry).forEach(areaKey => {
         updateMapMarker(areaKey);
       });
       renderSidebarList();
     }
-  }
-}
 
-// Re-fetch automatically whenever Device B returns to the foreground/tab
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') {
-    initVault();
-  }
-});
+    // Fetch and sync data from Cloudflare D1/R2 API
+    async function syncVault({ force = false } = {}) {
+      if (isSyncing || isMutating) return;
+      isSyncing = true;
+
+      if (force) setSyncStatus("Syncing...");
+
+      try {
+        const response = await fetch(`${API_BASE}/api/postcards?t=${Date.now()}`, {
+          cache: 'no-store'
+        });
+        if (!response.ok) throw new Error("Network response was not ok");
+
+        const postcards = await response.json();
+        const nextRegistry = {};
+
+        postcards.forEach(card => {
+          const areaKey = (card.area_key || card.area_name || '').trim().toLowerCase();
+          const lat = parseFloat(card.lat);
+          const lng = parseFloat(card.lng);
+
+          if (!areaKey || isNaN(lat) || isNaN(lng)) return;
+
+          if (!nextRegistry[areaKey]) {
+            nextRegistry[areaKey] = {
+              areaName: card.area_name,
+              lat: lat,
+              lng: lng,
+              cards: []
+            };
+          }
+          nextRegistry[areaKey].cards.push({
+            id: card.id,
+            title: card.title,
+            image: card.image_url
+          });
+        });
+
+        const nextSignature = computeRegistrySignature(nextRegistry);
+
+        // Only re-render DOM & map markers if D1 records changed
+        if (nextSignature !== lastDataSignature) {
+          districtRegistry = nextRegistry;
+          lastDataSignature = nextSignature;
+          rebuildAllMarkers();
+          await saveVaultData();
+
+          // Fit bounds only on initial load so background syncs never interrupt browsing
+          if (!hasInitialFit) {
+            const bounds = markerClusterGroup.getBounds();
+            if (bounds.isValid()) {
+              map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
+            }
+          }
+        }
+
+        hasInitialFit = true;
+        const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        setSyncStatus(`Synced • ${now}`, false);
+
+      } catch (err) {
+        console.warn("Backend connection failed. Loading cached local data...", err);
+        setSyncStatus("Offline (Cached)", true);
+
+        if (!hasInitialFit) {
+          const savedData = await localforage.getItem('pikmin_vault_data');
+          if (savedData) {
+            districtRegistry = savedData;
+            lastDataSignature = computeRegistrySignature(districtRegistry);
+            rebuildAllMarkers();
+            hasInitialFit = true;
+          }
+        }
+      } finally {
+        isSyncing = false;
+      }
+    }
+
+    // Immediate sync triggers when switching back to the app/tab or reconnecting
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        syncVault();
+      }
+    });
+    window.addEventListener('focus', () => syncVault());
+    window.addEventListener('pageshow', () => syncVault());
+    window.addEventListener('online', () => syncVault({ force: true }));
+
+    // Background polling while app is open in the foreground
+    setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        syncVault();
+      }
+    }, SYNC_INTERVAL_MS);
 
     // Register Service Worker
-    // Register Service Worker
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW registration failed:', err));
-  });
-}
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW registration failed:', err));
+      });
+    }
 
-// FIX: Initialize data immediately on page load
-initVault();
+    // Initial sync on startup
+    syncVault({ force: true });
   </script>
 </body>
 </html>
